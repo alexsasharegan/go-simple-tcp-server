@@ -84,6 +84,7 @@ func handleSignalClose() <-chan bool {
 	go func() {
 		<-sigc
 		fmt.Println("graceful shutdown")
+		// TODO: Would this block for the caller to finish execution before os.Exit()?
 		done <- true
 		os.Exit(0)
 	}()
