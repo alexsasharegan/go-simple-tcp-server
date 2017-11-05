@@ -38,6 +38,10 @@ func main() {
 	sig := make(chan os.Signal)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGKILL)
 
+	// Set up intervals
+	go counter.RunOutputInterval(outputIntvl)
+	go counter.RunLogInterval(logIntv)
+
 	// Receive new connections on a chan.
 	conns := acceptConns(srv, counter)
 
@@ -48,10 +52,9 @@ func main() {
 		case <-sig:
 			// Add a leading new line since the signal escape sequence prints on stdout.
 			fmt.Printf("\nShutting down server.\n")
-			err = counter.FlushClose()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error flushing log to disk: %v", err)
-			}
+			// Stop intervals.
+			counter.StopOutputIntvl()
+			counter.StopLogIntvl()
 			os.Exit(0)
 		}
 	}
@@ -122,19 +125,18 @@ func handleConnection(conn net.Conn, counter *Counter) {
 
 	/* From here on out, we have a valid input. */
 
-	// Increment total counter
-	counter.Cnt++
+	// Increment total counter safely
+	counter.Inc()
 
 	// Echo input back to conn.
 	fmt.Fprintf(conn, "%d\n", num)
 
 	// Check if input has been recorded prev.
-	if counter.Uniq[num] {
+	if counter.HasUniq(num) {
 		return
 	}
 	// Record the new unique value.
-	counter.Uniq[num] = true
-	fmt.Printf("Unique entry: %d\n", num)
+	counter.RecUniq(num)
 
 	// In this case, logging is part of our reqs.
 	// We should fail is we didn't get this right.

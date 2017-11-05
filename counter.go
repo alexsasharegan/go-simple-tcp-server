@@ -6,10 +6,13 @@ import (
 	"io"
 	"log"
 	"os"
+	"sync"
+	"time"
 )
 
 // Counter is a container for tracking and managing the runtime counters.
 type Counter struct {
+	mu sync.RWMutex
 	// Uniq is a map of the unique numbers received during uptime.
 	Uniq map[int]bool
 	// Cnt valid numbers received during uptime.
@@ -22,6 +25,10 @@ type Counter struct {
 		// w is a buffered writer to the current log entry
 		w *bufio.Writer
 		f io.Closer
+	}
+	intvl *struct {
+		output  chan bool
+		logging chan bool
 	}
 	// Sem is a semaphore to do request limiting.
 	Sem chan int
@@ -43,6 +50,13 @@ func NewCounter(connLimit int) *Counter {
 			w: bufio.NewWriter(f),
 			f: f,
 		},
+		intvl: &struct {
+			output  chan bool
+			logging chan bool
+		}{
+			output:  make(chan bool),
+			logging: make(chan bool),
+		},
 	}
 }
 
@@ -62,15 +76,12 @@ func openLogFile(name string) *os.File {
 	return f
 }
 
-// FlushClose writes the log contents to disk, closes file, and clears counters.
+// FlushClose writes the log contents to disk and closes the file.
 func (c *Counter) FlushClose() (err error) {
 	err = c.Log.w.Flush()
 	if err != nil {
 		return fmt.Errorf("could not flush log to disk: %v", err)
 	}
-
-	// Clear interval counter after the log has been flushed.
-	c.IntvlCnt = 0
 
 	err = c.Log.f.Close()
 	if err != nil {
@@ -99,5 +110,89 @@ func (c *Counter) FlushRotate() (err error) {
 // WriteInt writes a new unique value to the buffered writer.
 func (c *Counter) WriteInt(i int) (err error) {
 	_, err = c.Log.w.WriteString(fmt.Sprintf("%d\n", i))
+	return
+}
+
+func (c *Counter) outputCounters() {
+	c.mu.Lock()
+
+	fmt.Printf(
+		"Count unique: %d\n"+
+			"Count total: %d\n"+
+			"Count last: %d\n",
+		len(c.Uniq),
+		c.Cnt,
+		c.IntvlCnt)
+	c.IntvlCnt = 0
+
+	c.mu.Unlock()
+}
+
+// RunOutputInterval outputs the counters on an interval.
+// It takes a nil channel that the caller will close to stop execution.
+// Must be run on go routine.
+func (c *Counter) RunOutputInterval(intvl time.Duration) {
+	for {
+		select {
+		case <-time.After(intvl):
+			c.outputCounters()
+		case <-c.intvl.output:
+			return
+		}
+	}
+}
+
+// StopOutputIntvl exits the output interval by closing it's underlying nil channel.
+func (c *Counter) StopOutputIntvl() {
+	close(c.intvl.output)
+}
+
+// RunLogInterval outputs the counters on an interval.
+// It takes a nil channel that the caller will close to stop execution.
+// Must be run on go routine.
+func (c *Counter) RunLogInterval(intvl time.Duration) {
+	var err error
+	for {
+		select {
+		case <-time.After(intvl):
+			err = c.FlushRotate()
+			if err != nil {
+				log.Fatalf("could not flush and rotate logs: %v", err)
+			}
+		case <-c.intvl.logging:
+			err = c.FlushClose()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error flushing log to disk: %v", err)
+			}
+			return
+		}
+	}
+}
+
+// StopLogIntvl exits the output interval by closing it's underlying nil channel.
+func (c *Counter) StopLogIntvl() {
+	close(c.intvl.logging)
+}
+
+// Inc increments the counters in a thread safe way.
+func (c *Counter) Inc() {
+	c.mu.Lock()
+	c.Cnt++
+	c.IntvlCnt++
+	c.mu.Unlock()
+}
+
+// RecUniq adds a unique int to the map in a thread safe way.
+func (c *Counter) RecUniq(num int) {
+	c.mu.Lock()
+	c.Uniq[num] = true
+	c.mu.Unlock()
+}
+
+// HasUniq checks if an int has been recorded in a thread safe way.
+func (c *Counter) HasUniq(num int) (b bool) {
+	c.mu.RLock()
+	b = c.Uniq[num]
+	c.mu.RUnlock()
 	return
 }
