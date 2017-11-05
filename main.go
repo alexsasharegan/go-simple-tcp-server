@@ -3,18 +3,23 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
+	"time"
 )
 
 const (
-	port      = 3280
-	connLimit = 6
+	port        = 3280
+	connLimit   = 6
+	validLen    = 10
+	minValue    = 1000000
+	outputIntvl = 5 * time.Second
+	logIntv     = 10 * time.Second
 )
 
 func main() {
@@ -27,44 +32,44 @@ func main() {
 	fmt.Printf("Started %s server.\nListening on %s\n", srv.Addr().Network(), srv.Addr().String())
 	defer srv.Close()
 
+	counter := NewCounter(connLimit)
+
 	// Listen for termination signals.
 	sig := make(chan os.Signal)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGKILL)
 
-	// Semaphore
-	sem := make(chan int, connLimit)
 	// Receive new connections on a chan.
-	conns := acceptConns(srv, sem)
+	conns := acceptConns(srv, counter)
 
 	for {
 		select {
 		case conn := <-conns:
-			go handleConnection(conn, sem)
+			go handleConnection(conn, counter)
 		case <-sig:
-			// Signals generally print their escape sequence to stdout,
-			// so add a leading new line.
+			// Add a leading new line since the signal escape sequence prints on stdout.
 			fmt.Printf("\nShutting down server.\n")
+			err = counter.FlushClose()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error flushing log to disk: %v", err)
+			}
 			os.Exit(0)
 		}
 	}
 }
 
-func acceptConns(srv net.Listener, sem chan<- int) <-chan net.Conn {
+func acceptConns(srv net.Listener, counter *Counter) <-chan net.Conn {
 	conns := make(chan net.Conn)
 
 	go func() {
 		for {
 			conn, err := srv.Accept()
 			if err != nil {
-				fmt.Printf("Error accepting connection: %v\n", err)
+				fmt.Fprintf(os.Stderr, "Error accepting connection: %v\n", err)
 				continue
 			}
-			// Try pushing a marker value on our semaphore,
-			// if we haven't hit our connection limit,
-			// pass the connection onto the channel,
-			// otherwise close it.
+
 			select {
-			case sem <- 1:
+			case counter.Sem <- 1:
 				conns <- conn
 			default:
 				fmt.Fprintf(conn, "Server busy.")
@@ -77,8 +82,10 @@ func acceptConns(srv net.Listener, sem chan<- int) <-chan net.Conn {
 }
 
 // Handles incoming requests.
-func handleConnection(conn net.Conn, sem <-chan int) {
-	// Defer all close logic
+func handleConnection(conn net.Conn, counter *Counter) {
+	// Defer all close logic.
+	// Using a closure makes it easy to group logic as well as execute serially
+	// and avoid the deferred LIFO exec order.
 	defer func() {
 		// Since handleConnection is run in a go routine,
 		// it manages the closing of our net.Conn.
@@ -86,48 +93,52 @@ func handleConnection(conn net.Conn, sem <-chan int) {
 		// Once our connection is closed,
 		// we can drain a value from our semaphore
 		// to free up a space in the connection limit.
-		<-sem
+		<-counter.Sem
 	}()
 
-	var (
-		str string
-		i   int
-		err error
-		s   = bufio.NewScanner(conn)
-	)
-
-	for s.Scan() {
-		str = strings.TrimSpace(s.Text())
-		if str == "" {
-			fmt.Fprintf(conn, "malformed request\n")
-			return
-		}
-		i, err = strconv.Atoi(str)
-		if err != nil {
-			fmt.Fprintf(conn, "malformed request\n")
-			return
-		}
-		break
-	}
-
-	if err := s.Err(); err != nil {
+	rdr := bufio.NewReader(conn)
+	s, err := rdr.ReadString('\n')
+	// Failure to read input is probably my bad. Exit(1)
+	if err != nil && err != io.EOF {
 		log.Fatalf("Error reading: %v", err)
 	}
 
-	fmt.Fprintf(conn, "%d\n", i)
-	err = logToFile(fmt.Sprintf("%d", i))
-	if err != nil {
-		fmt.Printf("could not log request: %v\n", err)
+	// Digit chars as safe for counting via len()
+	if len(s) != validLen {
+		fmt.Fprintf(conn, "ERR malformed request: incorrect length.\n")
+		return
 	}
-}
 
-func logToFile(s string) error {
-	f, err := os.OpenFile(fmt.Sprintf("logs/data.%d.log", 0), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	num, err := strconv.Atoi(s)
 	if err != nil {
-		return fmt.Errorf("could not open log file: %v", err)
+		fmt.Fprintf(conn, "ERR malformed request: expected number\n")
+		return
 	}
-	defer f.Close()
 
-	f.WriteString(s + "\n")
-	return nil
+	if num < minValue {
+		fmt.Fprintf(conn, "ERR malformed request: number must be greater than 1,000,000\n")
+		return
+	}
+
+	/* From here on out, we have a valid input. */
+
+	// Increment total counter
+	counter.Cnt++
+
+	// Echo input back to conn.
+	fmt.Fprintf(conn, "%d\n", num)
+
+	// Check if input has been recorded prev.
+	if counter.Uniq[num] {
+		return
+	}
+	// Record the new unique value.
+	counter.Uniq[num] = true
+	fmt.Printf("Unique entry: %d\n", num)
+
+	// In this case, logging is part of our reqs.
+	// We should fail is we didn't get this right.
+	if err = counter.WriteInt(num); err != nil {
+		log.Fatalf("could not log unique value: %v\n", err)
+	}
 }
