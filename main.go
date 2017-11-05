@@ -19,7 +19,7 @@ const (
 	validLen    = 10
 	minValue    = 1000000
 	outputIntvl = 5 * time.Second
-	logIntv     = 10 * time.Second
+	logIntvl    = 10 * time.Second
 )
 
 func main() {
@@ -40,7 +40,7 @@ func main() {
 
 	// Set up intervals
 	go counter.RunOutputInterval(outputIntvl)
-	go counter.RunLogInterval(logIntv)
+	go counter.RunLogInterval(logIntvl)
 
 	// Receive new connections on a chan.
 	conns := acceptConns(srv, counter)
