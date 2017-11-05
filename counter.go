@@ -118,8 +118,8 @@ func (c *Counter) outputCounters() {
 
 	fmt.Printf(
 		"Count unique: %d\n"+
-			"Count total: %d\n"+
-			"Count last: %d\n",
+			"Count total : %d\n"+
+			"Count last  : %d\n",
 		len(c.Uniq),
 		c.Cnt,
 		c.IntvlCnt)
