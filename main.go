@@ -119,7 +119,7 @@ func handleConnection(conn net.Conn, counter *Counter) {
 	}
 
 	if num < minValue {
-		fmt.Fprintf(conn, "ERR malformed request: number must be greater than 1,000,000\n")
+		fmt.Fprintf(conn, "ERR malformed request: number must be greater than %d\n", minValue)
 		return
 	}
 
