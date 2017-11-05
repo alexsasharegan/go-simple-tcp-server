@@ -203,3 +203,10 @@ func (c *Counter) HasUniq(num int) (b bool) {
 	c.mu.RUnlock()
 	return
 }
+
+// Close closes all internals and flushes logs to disk.
+func (c *Counter) Close() (err error) {
+	c.StopOutputIntvl()
+	c.StopLogIntvl()
+	return
+}

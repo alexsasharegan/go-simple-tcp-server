@@ -29,7 +29,9 @@ func main() {
 		log.Fatalf("Error listening: %v", err)
 	}
 
-	fmt.Printf("Started %s server.\nListening on %s\n", srv.Addr().Network(), srv.Addr().String())
+	fmt.Printf(
+		"Started %s server.\nListening on %s\n",
+		srv.Addr().Network(), srv.Addr().String())
 	defer srv.Close()
 
 	counter := NewCounter(connLimit)
@@ -52,9 +54,7 @@ func main() {
 		case <-sig:
 			// Add a leading new line since the signal escape sequence prints on stdout.
 			fmt.Printf("\nShutting down server.\n")
-			// Stop intervals.
-			counter.StopOutputIntvl()
-			counter.StopLogIntvl()
+			counter.Close()
 			os.Exit(0)
 		}
 	}
