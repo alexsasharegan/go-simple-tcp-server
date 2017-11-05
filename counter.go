@@ -124,7 +124,8 @@ func (c *Counter) outputCounters() {
 	c.mu.Lock()
 
 	fmt.Printf(
-		"Count unique: %d\n"+
+		"----------------\n"+
+			"Count unique: %d\n"+
 			"Count total : %d\n"+
 			"Count last  : %d\n",
 		len(c.Uniq),

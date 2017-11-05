@@ -99,8 +99,8 @@ func handleConnection(conn net.Conn, counter *Counter) {
 		<-counter.Sem
 	}()
 
-	rdr := bufio.NewReader(conn)
-	s, err := rdr.ReadString('\n')
+	r := bufio.NewReader(conn)
+	s, err := r.ReadString('\n')
 	// Failure to read input is probably my bad. Exit(1)
 	if err != nil && err != io.EOF {
 		log.Fatalf("Error reading: %v", err)
@@ -108,18 +108,18 @@ func handleConnection(conn net.Conn, counter *Counter) {
 
 	// Digit chars as safe for counting via len()
 	if len(s) != validLen {
-		fmt.Fprintf(conn, "ERR malformed request: incorrect length.\n")
+		fmt.Fprintf(conn, "ERR Malformed Request: expected length %d, got %d.\n", validLen, len(s))
 		return
 	}
 
 	num, err := strconv.Atoi(s)
 	if err != nil {
-		fmt.Fprintf(conn, "ERR malformed request: expected number\n")
+		fmt.Fprintf(conn, "ERR Malformed Request: expected number\n")
 		return
 	}
 
 	if num < minValue {
-		fmt.Fprintf(conn, "ERR malformed request: number must be greater than %d\n", minValue)
+		fmt.Fprintf(conn, "ERR Malformed Request: expected number greater than %d\n", minValue)
 		return
 	}
 
