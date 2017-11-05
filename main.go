@@ -10,8 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-
-	"github.com/alexsasharegan/go-simple-tcp-server/sync"
 )
 
 const (
@@ -30,32 +28,29 @@ func main() {
 	defer srv.Close()
 
 	// Listen for termination signals.
-	sigc := make(chan os.Signal)
-	signal.Notify(sigc, syscall.SIGTERM, syscall.SIGINT)
+	sig := make(chan os.Signal)
+	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGKILL)
 
-	// Sized wait groups block incrementing if their limit is reached.
-	swg := sync.NewSizedWaitGroup(connLimit)
-	// Communicate new connections on a chan of net.Conn.
-	netc := acceptConns(srv)
+	// Semaphore
+	sem := make(chan int, connLimit)
+	// Receive new connections on a chan.
+	conns := acceptConns(srv, sem)
 
-listen:
 	for {
 		select {
-		case conn := <-netc:
-			swg.Add(1)
-			go handleConnection(conn, swg)
-			break
-		case <-sigc:
+		case conn := <-conns:
+			go handleConnection(conn, sem)
+		case <-sig:
 			// Signals generally print their escape sequence to stdout,
 			// so add a leading new line.
 			fmt.Printf("\nShutting down server.\n")
-			break listen
+			os.Exit(0)
 		}
 	}
 }
 
-func acceptConns(srv net.Listener) <-chan net.Conn {
-	netc := make(chan net.Conn)
+func acceptConns(srv net.Listener, sem chan<- int) <-chan net.Conn {
+	conns := make(chan net.Conn)
 
 	go func() {
 		for {
@@ -64,17 +59,35 @@ func acceptConns(srv net.Listener) <-chan net.Conn {
 				fmt.Printf("Error accepting connection: %v\n", err)
 				continue
 			}
-			netc <- conn
+			// Try pushing a marker value on our semaphore,
+			// if we haven't hit our connection limit,
+			// pass the connection onto the channel,
+			// otherwise close it.
+			select {
+			case sem <- 1:
+				conns <- conn
+			default:
+				fmt.Fprintf(conn, "Server busy.")
+				conn.Close()
+			}
 		}
 	}()
 
-	return netc
+	return conns
 }
 
 // Handles incoming requests.
-func handleConnection(conn net.Conn, swg *sync.SizedWaitGroup) {
-	defer swg.Done()
-	defer conn.Close()
+func handleConnection(conn net.Conn, sem <-chan int) {
+	// Defer all close logic
+	defer func() {
+		// Since handleConnection is run in a go routine,
+		// it manages the closing of our net.Conn.
+		conn.Close()
+		// Once our connection is closed,
+		// we can drain a value from our semaphore
+		// to free up a space in the connection limit.
+		<-sem
+	}()
 
 	var (
 		str string
