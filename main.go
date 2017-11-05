@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"log"
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/alexsasharegan/go-simple-tcp-server/sync"
@@ -23,7 +26,7 @@ func main() {
 		log.Fatalf("Error listening: %v", err)
 	}
 
-	fmt.Printf("Listening on localhost:%d\n", port)
+	fmt.Printf("Started %s server.\nListening on %s\n", srv.Addr().Network(), srv.Addr().String())
 	defer srv.Close()
 
 	// Listen for termination signals.
@@ -40,7 +43,7 @@ listen:
 		select {
 		case conn := <-netc:
 			swg.Add(1)
-			go handleRequest(conn, swg)
+			go handleConnection(conn, swg)
 			break
 		case <-sigc:
 			// Signals generally print their escape sequence to stdout,
@@ -55,44 +58,63 @@ func acceptConns(srv net.Listener) <-chan net.Conn {
 	netc := make(chan net.Conn)
 
 	go func() {
-		conn, err := srv.Accept()
-		if err != nil {
-			log.Fatalf("Error accepting connection: %v", err)
+		for {
+			conn, err := srv.Accept()
+			if err != nil {
+				fmt.Printf("Error accepting connection: %v\n", err)
+				continue
+			}
+			netc <- conn
 		}
-		netc <- conn
 	}()
 
 	return netc
 }
 
 // Handles incoming requests.
-func handleRequest(conn net.Conn, swg *sync.SizedWaitGroup) {
-	defer conn.Close()
+func handleConnection(conn net.Conn, swg *sync.SizedWaitGroup) {
 	defer swg.Done()
-	// Make a buffer to hold incoming data.
-	b := make([]byte, 1024)
-	// Read the incoming connection into the buffer.
-	_, err := conn.Read(b)
-	if err != nil {
+	defer conn.Close()
+
+	var (
+		str string
+		i   int
+		err error
+		s   = bufio.NewScanner(conn)
+	)
+
+	for s.Scan() {
+		str = strings.TrimSpace(s.Text())
+		if str == "" {
+			fmt.Fprintf(conn, "malformed request\n")
+			return
+		}
+		i, err = strconv.Atoi(str)
+		if err != nil {
+			fmt.Fprintf(conn, "malformed request\n")
+			return
+		}
+		break
+	}
+
+	if err := s.Err(); err != nil {
 		log.Fatalf("Error reading: %v", err)
 	}
+
+	fmt.Fprintf(conn, "%d\n", i)
+	err = logToFile(fmt.Sprintf("%d", i))
 	if err != nil {
-		log.Fatalf("could not parse request: %v", err)
-	}
-	conn.Write([]byte(fmt.Sprintf("Message received: %s", string(b))))
-	err = logToFile(b)
-	if err != nil {
-		log.Fatalf("could not log request: %v", err)
+		fmt.Printf("could not log request: %v\n", err)
 	}
 }
 
-func logToFile(b []byte) error {
-	f, err := os.OpenFile(fmt.Sprintf("data.%d.log", 0), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+func logToFile(s string) error {
+	f, err := os.OpenFile(fmt.Sprintf("logs/data.%d.log", 0), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return fmt.Errorf("could not open log file: %v", err)
 	}
 	defer f.Close()
 
-	f.Write(b)
+	f.WriteString(s + "\n")
 	return nil
 }
