@@ -78,6 +78,9 @@ func openLogFile(name string) *os.File {
 
 // FlushClose writes the log contents to disk and closes the file.
 func (c *Counter) FlushClose() (err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	err = c.Log.w.Flush()
 	if err != nil {
 		return fmt.Errorf("could not flush log to disk: %v", err)
@@ -98,18 +101,22 @@ func (c *Counter) FlushRotate() (err error) {
 		return
 	}
 
+	c.mu.Lock()
 	c.Log.Cnt++
 	f := openLogFile(fmt.Sprintf(logFmt, c.Log.Cnt))
 
 	c.Log.f = f
 	c.Log.w = bufio.NewWriter(f)
+	c.mu.Unlock()
 
 	return
 }
 
 // WriteInt writes a new unique value to the buffered writer.
 func (c *Counter) WriteInt(i int) (err error) {
+	c.mu.Lock()
 	_, err = c.Log.w.WriteString(fmt.Sprintf("%d\n", i))
+	c.mu.Unlock()
 	return
 }
 
