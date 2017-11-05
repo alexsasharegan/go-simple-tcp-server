@@ -12,52 +12,75 @@ import (
 )
 
 const (
-	host      = "localhost"
-	port      = "3280"
+	port      = 3280
 	connLimit = 6
 )
 
 func main() {
-	handleSignalClose()
-	l, err := net.Listen("tcp", host+":"+port)
+	// Start up the tcp server.
+	srv, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		log.Fatalf("Error listening: %v", err)
 	}
 
-	fmt.Println("Listening on " + host + ":" + port)
-	defer l.Close()
+	fmt.Printf("Listening on localhost:%d\n", port)
+	defer srv.Close()
 
+	// Listen for termination signals.
+	sigc := make(chan os.Signal)
+	signal.Notify(sigc, syscall.SIGTERM, syscall.SIGINT)
+
+	// Sized wait groups block incrementing if their limit is reached.
 	swg := sync.NewSizedWaitGroup(connLimit)
+	// Communicate new connections on a chan of net.Conn.
+	netc := acceptConns(srv)
 
+listen:
 	for {
-		swg.Add(1)
-		conn, err := l.Accept()
-		if err != nil {
-			log.Fatalf("Error accepting connection: %v", err)
+		select {
+		case conn := <-netc:
+			swg.Add(1)
+			go handleRequest(conn, swg)
+			break
+		case <-sigc:
+			// Signals generally print their escape sequence to stdout,
+			// so add a leading new line.
+			fmt.Printf("\nShutting down server.\n")
+			break listen
 		}
-
-		go func() {
-			defer swg.Done()
-			handleRequest(conn)
-		}()
 	}
 }
 
+func acceptConns(srv net.Listener) <-chan net.Conn {
+	netc := make(chan net.Conn)
+
+	go func() {
+		conn, err := srv.Accept()
+		if err != nil {
+			log.Fatalf("Error accepting connection: %v", err)
+		}
+		netc <- conn
+	}()
+
+	return netc
+}
+
 // Handles incoming requests.
-func handleRequest(conn net.Conn) {
+func handleRequest(conn net.Conn, swg *sync.SizedWaitGroup) {
 	defer conn.Close()
+	defer swg.Done()
 	// Make a buffer to hold incoming data.
-	buf := make([]byte, 1024)
+	b := make([]byte, 1024)
 	// Read the incoming connection into the buffer.
-	_, err := conn.Read(buf)
+	_, err := conn.Read(b)
 	if err != nil {
 		log.Fatalf("Error reading: %v", err)
 	}
 	if err != nil {
 		log.Fatalf("could not parse request: %v", err)
 	}
-	conn.Write([]byte(fmt.Sprintf("Message received: %s", string(buf))))
-	err = logToFile(buf)
+	conn.Write([]byte(fmt.Sprintf("Message received: %s", string(b))))
+	err = logToFile(b)
 	if err != nil {
 		log.Fatalf("could not log request: %v", err)
 	}
@@ -72,22 +95,4 @@ func logToFile(b []byte) error {
 
 	f.Write(b)
 	return nil
-}
-
-// handleSignalClose sets up a signal listener for shutdown signals.
-// It returns a bool channel to communicate shutdown and allow the caller to perform tear down.
-func handleSignalClose() <-chan bool {
-	sigc := make(chan os.Signal, 1)
-	done := make(chan bool, 1)
-	signal.Notify(sigc, syscall.SIGTERM, syscall.SIGINT)
-
-	go func() {
-		<-sigc
-		fmt.Println("graceful shutdown")
-		// TODO: Would this block for the caller to finish execution before os.Exit()?
-		done <- true
-		os.Exit(0)
-	}()
-
-	return done
 }
