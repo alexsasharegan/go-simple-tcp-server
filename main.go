@@ -14,12 +14,12 @@ import (
 )
 
 const (
-	port        = 3280
-	connLimit   = 6
-	validLen    = 10
-	minValue    = 1000000
-	outputIntvl = 5 * time.Second
-	logIntvl    = 10 * time.Second
+	port      = 3280
+	connLimit = 6
+	validLen  = 10
+	minValue  = 1000000
+	outIntvl  = 5 * time.Second
+	logIntvl  = 10 * time.Second
 )
 
 func main() {
@@ -41,10 +41,10 @@ func main() {
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGKILL)
 
 	// Set up intervals
-	go counter.RunOutputInterval(outputIntvl)
+	go counter.RunOutputInterval(outIntvl)
 	go counter.RunLogInterval(logIntvl)
 
-	// Receive new connections on a chan.
+	// Receive new connections on an unbuffered channel.
 	conns := acceptConns(srv, counter)
 
 	for {
@@ -60,6 +60,8 @@ func main() {
 	}
 }
 
+// acceptConns uses the semaphore channel on the counter to rate limit.
+// New connections get sent on the returned channel.
 func acceptConns(srv net.Listener, counter *Counter) <-chan net.Conn {
 	conns := make(chan net.Conn)
 
@@ -85,6 +87,8 @@ func acceptConns(srv net.Listener, counter *Counter) <-chan net.Conn {
 }
 
 // Handles incoming requests.
+// Input is parsed and written to log if unique.
+// Handles closing of the connection.
 func handleConnection(conn net.Conn, counter *Counter) {
 	// Defer all close logic.
 	// Using a closure makes it easy to group logic as well as execute serially
@@ -101,12 +105,14 @@ func handleConnection(conn net.Conn, counter *Counter) {
 
 	r := bufio.NewReader(conn)
 	s, err := r.ReadString('\n')
-	// Failure to read input is probably my bad. Exit(1)
+	// If a failure to read input occurs,
+	// it's probably my bad.
+	// Fail and figure it out if so!
 	if err != nil && err != io.EOF {
 		log.Fatalf("Error reading: %v", err)
 	}
 
-	// Digit chars as safe for counting via len()
+	// Digit chars are safe for counting via len()
 	if len(s) != validLen {
 		fmt.Fprintf(conn, "ERR Malformed Request: expected length %d, got %d.\n", validLen, len(s))
 		return
@@ -125,22 +131,20 @@ func handleConnection(conn net.Conn, counter *Counter) {
 
 	/* From here on out, we have a valid input. */
 
-	// Increment total counter safely
+	// Safely increment total counter.
 	counter.Inc()
 
-	// Echo input back to conn.
+	// Echo input back to conn (not required).
 	fmt.Fprintf(conn, "%d\n", num)
 
-	// Check if input has been recorded prev.
-	if counter.HasUniq(num) {
+	// Check if input has been recorded previously.
+	if counter.HasValue(num) {
 		return
 	}
 	// Record the new unique value.
-	counter.RecUniq(num)
-
 	// In this case, logging is part of our reqs.
 	// We should fail is we didn't get this right.
-	if err = counter.WriteInt(num); err != nil {
+	if err = counter.RecordUniq(num); err != nil {
 		log.Fatalf("could not log unique value: %v\n", err)
 	}
 }

@@ -112,15 +112,19 @@ func (c *Counter) FlushRotate() (err error) {
 	return
 }
 
-// WriteInt writes a new unique value to the buffered writer.
-func (c *Counter) WriteInt(i int) (err error) {
+// RecordUniq adds a unique int to the map and the log buffer in a thread safe way.
+func (c *Counter) RecordUniq(num int) (err error) {
 	c.mu.Lock()
-	_, err = c.Log.w.WriteString(fmt.Sprintf("%d\n", i))
+	c.Uniq[num] = true
+	_, err = c.Log.w.WriteString(fmt.Sprintf("%d\n", num))
 	c.mu.Unlock()
-	return
+	return err
 }
 
 func (c *Counter) outputCounters() {
+	// We could use a read lock first,
+	// then grab a write lock to clear counter.
+	// TODO: Test speed to determine which approach is faster.
 	c.mu.Lock()
 
 	fmt.Printf(
@@ -190,15 +194,8 @@ func (c *Counter) Inc() {
 	c.mu.Unlock()
 }
 
-// RecUniq adds a unique int to the map in a thread safe way.
-func (c *Counter) RecUniq(num int) {
-	c.mu.Lock()
-	c.Uniq[num] = true
-	c.mu.Unlock()
-}
-
-// HasUniq checks if an int has been recorded in a thread safe way.
-func (c *Counter) HasUniq(num int) (b bool) {
+// HasValue checks if an int has been recorded in a thread safe way.
+func (c *Counter) HasValue(num int) (b bool) {
 	c.mu.RLock()
 	b = c.Uniq[num]
 	c.mu.RUnlock()
