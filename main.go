@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"os"
@@ -24,7 +23,7 @@ const (
 
 func main() {
 	// Start up the tcp server.
-	srv, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", port))
+	srv, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		log.Fatalf("Error listening: %v", err)
 	}
@@ -103,48 +102,49 @@ func handleConnection(conn net.Conn, counter *Counter) {
 		<-counter.Sem
 	}()
 
-	r := bufio.NewReader(conn)
-	s, err := r.ReadString('\n')
+	scanner := bufio.NewScanner(conn)
+	var s string
+	for scanner.Scan() {
+		s = scanner.Text()
+
+		// Malformed Request: invalid length
+		// Digit chars are safe for counting via len()
+		if len(s) != validLen {
+			continue
+		}
+
+		num, err := strconv.Atoi(s)
+		// Malformed Request: not a number
+		if err != nil {
+			continue
+		}
+
+		// Malformed Request: less than minimum
+		if num < minValue {
+			continue
+		}
+
+		/* From here on out, we have a valid input. */
+		// Safely increment total counter.
+		counter.Inc()
+
+		// Check if input has been recorded previously.
+		if counter.HasValue(num) {
+			continue
+		}
+
+		// Record the new unique value.
+		// In this case, logging is part of our reqs.
+		// We should fail is we didn't get this right.
+		if err = counter.RecordUniq(num); err != nil {
+			log.Fatalf("could not log unique value: %v\n", err)
+		}
+	}
+
 	// If a failure to read input occurs,
 	// it's probably my bad.
 	// Fail and figure it out if so!
-	if err != nil && err != io.EOF {
+	if err := scanner.Err(); err != nil {
 		log.Fatalf("Error reading: %v", err)
-	}
-
-	// Digit chars are safe for counting via len()
-	if len(s) != validLen {
-		fmt.Fprintf(conn, "ERR Malformed Request: expected length %d, got %d.\n", validLen, len(s))
-		return
-	}
-
-	num, err := strconv.Atoi(s)
-	if err != nil {
-		fmt.Fprintf(conn, "ERR Malformed Request: expected number\n")
-		return
-	}
-
-	if num < minValue {
-		fmt.Fprintf(conn, "ERR Malformed Request: expected number greater than %d\n", minValue)
-		return
-	}
-
-	/* From here on out, we have a valid input. */
-
-	// Safely increment total counter.
-	counter.Inc()
-
-	// Echo input back to conn (not required).
-	fmt.Fprintf(conn, "%d\n", num)
-
-	// Check if input has been recorded previously.
-	if counter.HasValue(num) {
-		return
-	}
-	// Record the new unique value.
-	// In this case, logging is part of our reqs.
-	// We should fail is we didn't get this right.
-	if err = counter.RecordUniq(num); err != nil {
-		log.Fatalf("could not log unique value: %v\n", err)
 	}
 }
