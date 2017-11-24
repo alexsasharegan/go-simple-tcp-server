@@ -124,7 +124,6 @@ func (c *Counter) RecordUniq(num int) (err error) {
 func (c *Counter) outputCounters() {
 	// We could use a read lock first,
 	// then grab a write lock to clear counter.
-	// TODO: Test speed to determine which approach is faster.
 	c.mu.Lock()
 
 	fmt.Printf(

@@ -24,7 +24,7 @@ const (
 
 func main() {
 	// Start up the tcp server.
-	srv, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	srv, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", port))
 	if err != nil {
 		log.Fatalf("Error listening: %v", err)
 	}
