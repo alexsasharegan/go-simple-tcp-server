@@ -21,6 +21,10 @@ const (
 	logIntvl  = 10 * time.Second
 )
 
+func init() {
+	os.Mkdir("./logs", 0777)
+}
+
 func main() {
 	// Start up the tcp server.
 	srv, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
